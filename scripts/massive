@@ -1,0 +1,392 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "${-}" == *x* ]]; then
+  printf 'refusing to run with shell xtrace enabled\n' >&2
+  exit 2
+fi
+
+MASSIVE_BASE_URL="${MASSIVE_BASE_URL:-https://api.massive.com}"
+MASSIVE_TIMEOUT_SECONDS="${MASSIVE_TIMEOUT_SECONDS:-30}"
+MASSIVE_USER_AGENT="${MASSIVE_USER_AGENT:-massive-com-cli/0.1}"
+MASSIVE_VERBOSE=0
+MASSIVE_SILENT=0
+MASSIVE_RAW=0
+MASSIVE_DRY_RUN=0
+MASSIVE_JSON=1
+QUERY_ARGS=()
+
+usage() {
+  cat <<'EOF'
+Usage:
+  massive health
+  massive get <path-or-url> [--query key=value ...]
+  massive next
+  massive stocks ticker-details <ticker>
+  massive stocks previous-close <ticker>
+  massive options contract-details <options-ticker>
+  massive forex currencies
+  massive crypto currencies
+  massive indices ticker-details <ticker>
+
+Flags:
+  --query key=value   Add a query parameter. Repeatable.
+  --raw               Print the raw response body.
+  --json              Validate and pretty-print JSON when jq is available.
+  --silent            Suppress non-error diagnostics.
+  --verbose           Log safe request metadata to stderr.
+  --dry-run           Print the resolved request without sending it.
+  --help              Show this message.
+
+Environment:
+  MASSIVE_API_KEY_REF JSON secret reference (preferred)
+  MASSIVE_API_KEY     Plaintext fallback for local use
+  MASSIVE_BASE_URL    Override API origin (must be HTTPS)
+EOF
+}
+
+die() {
+  printf '%s\n' "$*" >&2
+  exit 1
+}
+
+have() {
+  command -v "$1" >/dev/null 2>&1
+}
+
+require_https_origin() {
+  case "$1" in
+    https://*) ;;
+    *)
+      die "base URL must use https: $1"
+      ;;
+  esac
+}
+
+urlencode() {
+  jq -rn --arg v "$1" '$v|@uri'
+}
+
+redact() {
+  sed -E \
+    -e 's/(Authorization:)[[:space:]]*[^[:space:]]+/\1 [REDACTED]/Ig' \
+    -e 's/([?&]api[Kk]ey=)[^& ]+/\1[REDACTED]/g' \
+    -e 's/(X-Massive-API-Key:)[[:space:]]*[^[:space:]]+/\1 [REDACTED]/Ig'
+}
+
+log() {
+  if [[ "$MASSIVE_SILENT" -eq 0 ]]; then
+    printf '%s\n' "$*" | redact >&2
+  fi
+}
+
+debug() {
+  if [[ "$MASSIVE_VERBOSE" -eq 1 && "$MASSIVE_SILENT" -eq 0 ]]; then
+    printf '%s\n' "$*" | redact >&2
+  fi
+}
+
+parse_global_flags() {
+  REMAINING_ARGS=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --query)
+        [[ $# -ge 2 ]] || die "--query requires key=value"
+        QUERY_ARGS+=("$2")
+        shift 2
+        ;;
+      --raw)
+        MASSIVE_RAW=1
+        MASSIVE_JSON=0
+        shift
+        ;;
+      --json)
+        MASSIVE_JSON=1
+        shift
+        ;;
+      --silent)
+        MASSIVE_SILENT=1
+        shift
+        ;;
+      --verbose)
+        MASSIVE_VERBOSE=1
+        shift
+        ;;
+      --dry-run)
+        MASSIVE_DRY_RUN=1
+        shift
+        ;;
+      --help|-h)
+        usage
+        exit 0
+        ;;
+      *)
+        REMAINING_ARGS+=("$1")
+        shift
+        ;;
+    esac
+  done
+}
+
+resolve_api_key() {
+  if [[ -n "${MASSIVE_API_KEY_REF:-}" ]]; then
+    have jq || die "jq is required to resolve MASSIVE_API_KEY_REF"
+    local source
+    source="$(jq -r '.source // empty' <<<"${MASSIVE_API_KEY_REF}")"
+    case "$source" in
+      env)
+        local key_name
+        key_name="$(jq -r '.name // .key // empty' <<<"${MASSIVE_API_KEY_REF}")"
+        [[ -n "$key_name" ]] || die "env secret ref requires .name or .key"
+        [[ -n "${!key_name:-}" ]] || die "secret env var is unset: $key_name"
+        printf '%s' "${!key_name}"
+        return 0
+        ;;
+      file)
+        local file_path
+        file_path="$(jq -r '.path // empty' <<<"${MASSIVE_API_KEY_REF}")"
+        [[ -n "$file_path" ]] || die "file secret ref requires .path"
+        [[ -r "$file_path" ]] || die "secret file is not readable: $file_path"
+        tr -d '\r' <"$file_path" | sed -e '$s/[[:space:]]*$//'
+        return 0
+        ;;
+      exec)
+        local command_string
+        command_string="$(jq -r '.command // .cmd // empty' <<<"${MASSIVE_API_KEY_REF}")"
+        [[ -n "$command_string" ]] || die "exec secret ref requires .command or .cmd"
+        bash -lc "$command_string" | tr -d '\r' | sed -e '$s/[[:space:]]*$//'
+        return 0
+        ;;
+      *)
+        die "unsupported MASSIVE_API_KEY_REF source: ${source:-<empty>}"
+        ;;
+    esac
+  fi
+
+  [[ -n "${MASSIVE_API_KEY:-}" ]] || die "set MASSIVE_API_KEY_REF or MASSIVE_API_KEY"
+  printf '%s' "${MASSIVE_API_KEY}"
+}
+
+build_url() {
+  local target="$1"
+  shift || true
+
+  if [[ "$target" == https://* ]]; then
+    printf '%s' "$target"
+  else
+    printf '%s%s' "${MASSIVE_BASE_URL%/}" "$target"
+  fi
+
+  local separator='?'
+  if [[ "$target" == *\?* ]]; then
+    separator='&'
+  fi
+
+  local item key value
+  for item in "$@"; do
+    key="${item%%=*}"
+    value="${item#*=}"
+    printf '%s%s=%s' "$separator" "$(urlencode "$key")" "$(urlencode "$value")"
+    separator='&'
+  done
+}
+
+perform_get() {
+  local path_or_url="$1"
+  local api_key url body tmp_headers tmp_body http_code request_id duration_ms
+
+  require_https_origin "$MASSIVE_BASE_URL"
+  api_key="$(resolve_api_key)"
+  url="$(build_url "$path_or_url" "${QUERY_ARGS[@]}")"
+
+  if [[ "$MASSIVE_DRY_RUN" -eq 1 ]]; then
+    printf '{"method":"GET","url":"%s","auth":"configured"}\n' "$url"
+    return 0
+  fi
+
+  tmp_headers="$(mktemp)"
+  tmp_body="$(mktemp)"
+  local started
+  started="$(date +%s%3N 2>/dev/null || true)"
+  http_code="$(
+    curl \
+      --silent \
+      --show-error \
+      --location \
+      --max-time "$MASSIVE_TIMEOUT_SECONDS" \
+      --connect-timeout 10 \
+      --user-agent "$MASSIVE_USER_AGENT" \
+      --header "Authorization: Bearer ${api_key}" \
+      --header 'Accept: application/json' \
+      --dump-header "$tmp_headers" \
+      --output "$tmp_body" \
+      --write-out '%{http_code}' \
+      "$url"
+  )"
+  duration_ms="$(date +%s%3N 2>/dev/null || true)"
+  if [[ -n "$started" && -n "$duration_ms" ]]; then
+    duration_ms="$((duration_ms - started))"
+  else
+    duration_ms="unknown"
+  fi
+  request_id="$(awk 'BEGIN{IGNORECASE=1}/^x-request-id:/{sub(/\r$/,"",$2);print $2}' "$tmp_headers" | tail -n 1)"
+
+  debug "GET ${url} status=${http_code} request_id=${request_id:-n/a} latency_ms=${duration_ms}"
+
+  body="$(cat "$tmp_body")"
+  rm -f "$tmp_headers" "$tmp_body"
+
+  if [[ "$http_code" -lt 200 || "$http_code" -ge 300 ]]; then
+    if have jq && jq -e . >/dev/null 2>&1 <<<"$body"; then
+      jq . <<<"$body" >&2
+    else
+      printf '%s\n' "$body" >&2
+    fi
+    die "request failed with status ${http_code}"
+  fi
+
+  if [[ "$MASSIVE_RAW" -eq 1 ]]; then
+    printf '%s\n' "$body"
+    return 0
+  fi
+
+  if [[ "$MASSIVE_JSON" -eq 1 ]] && have jq && jq -e . >/dev/null 2>&1 <<<"$body"; then
+    jq . <<<"$body"
+  else
+    printf '%s\n' "$body"
+  fi
+}
+
+cmd_health() {
+  require_https_origin "$MASSIVE_BASE_URL"
+  have curl || die "curl is required"
+  have jq || log "jq not found; JSON formatting and secret-ref parsing are limited"
+  if resolve_api_key >/dev/null; then
+    printf '{"ok":true,"base_url":"%s","auth":"configured"}\n' "$MASSIVE_BASE_URL"
+  fi
+}
+
+cmd_next() {
+  have jq || die "jq is required for next"
+  local next_url
+  next_url="$(cat | jq -r '.next_url // empty')"
+  [[ -n "$next_url" ]] || die "stdin JSON did not contain next_url"
+  perform_get "$next_url"
+}
+
+cmd_stocks() {
+  local subcommand="${1:-}"
+  case "$subcommand" in
+    ticker-details)
+      [[ $# -ge 2 ]] || die "usage: massive stocks ticker-details <ticker>"
+      perform_get "/v3/reference/tickers/$2"
+      ;;
+    previous-close)
+      [[ $# -ge 2 ]] || die "usage: massive stocks previous-close <ticker>"
+      perform_get "/v2/aggs/ticker/$2/prev"
+      ;;
+    *)
+      die "unknown stocks subcommand: ${subcommand:-<empty>}"
+      ;;
+  esac
+}
+
+cmd_options() {
+  local subcommand="${1:-}"
+  case "$subcommand" in
+    contract-details)
+      [[ $# -ge 2 ]] || die "usage: massive options contract-details <options-ticker>"
+      perform_get "/v3/reference/options/contracts/$2"
+      ;;
+    *)
+      die "unknown options subcommand: ${subcommand:-<empty>}"
+      ;;
+  esac
+}
+
+cmd_forex() {
+  local subcommand="${1:-}"
+  case "$subcommand" in
+    currencies)
+      perform_get "/v3/reference/currencies" "market=fx" "${QUERY_ARGS[@]}"
+      ;;
+    *)
+      die "unknown forex subcommand: ${subcommand:-<empty>}"
+      ;;
+  esac
+}
+
+cmd_crypto() {
+  local subcommand="${1:-}"
+  case "$subcommand" in
+    currencies)
+      perform_get "/v3/reference/currencies" "market=crypto" "${QUERY_ARGS[@]}"
+      ;;
+    *)
+      die "unknown crypto subcommand: ${subcommand:-<empty>}"
+      ;;
+  esac
+}
+
+cmd_indices() {
+  local subcommand="${1:-}"
+  case "$subcommand" in
+    ticker-details)
+      [[ $# -ge 2 ]] || die "usage: massive indices ticker-details <ticker>"
+      perform_get "/v3/reference/tickers/I:$2"
+      ;;
+    *)
+      die "unknown indices subcommand: ${subcommand:-<empty>}"
+      ;;
+  esac
+}
+
+main() {
+  parse_global_flags "$@"
+  set -- "${REMAINING_ARGS[@]}"
+
+  local command="${1:-}"
+  case "$command" in
+    health)
+      shift
+      cmd_health "$@"
+      ;;
+    get)
+      shift
+      [[ $# -ge 1 ]] || die "usage: massive get <path-or-url>"
+      perform_get "$1"
+      ;;
+    next)
+      shift
+      cmd_next "$@"
+      ;;
+    stocks)
+      shift
+      cmd_stocks "$@"
+      ;;
+    options)
+      shift
+      cmd_options "$@"
+      ;;
+    forex)
+      shift
+      cmd_forex "$@"
+      ;;
+    crypto)
+      shift
+      cmd_crypto "$@"
+      ;;
+    indices)
+      shift
+      cmd_indices "$@"
+      ;;
+    ""|help|--help|-h)
+      usage
+      ;;
+    *)
+      die "unknown command: $command"
+      ;;
+  esac
+}
+
+main "$@"

@@ -1,0 +1,7 @@
+interface:
+  display_name: "Massive CLI"
+  short_description: "OpenClaw Bash wrapper for Massive API"
+  default_prompt: "Use $massive-com to query Massive REST endpoints through a safe Bash CLI for OpenClaw agents."
+
+policy:
+  allow_implicit_invocation: true
