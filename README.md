@@ -14,6 +14,8 @@ This repo is intentionally thin: it provides a generic, extensible shell wrapper
 
 ## Install
 
+### GitHub checkout
+
 Clone the repo and run the CLI directly:
 
 ```bash
@@ -21,6 +23,16 @@ git clone https://github.com/oscraters/massive-com.git
 cd massive-com
 chmod +x scripts/massive
 ```
+
+### Clawhub / OpenClaw usage
+
+This repo is structured as a public skill bundle:
+
+- `SKILL.md` contains the agent instructions
+- `agents/openai.yaml` contains the UI/invocation metadata
+- `scripts/massive` is the executable wrapper
+
+For Clawhub distribution, publish the repo as-is and point consumers at the repository root. Do not add local-only setup files, captured payloads, or personal environment artifacts.
 
 Required runtime tools:
 
@@ -49,6 +61,8 @@ export MASSIVE_API_KEY='your-api-key'
 ```
 
 The CLI does not maintain a local credential store. It resolves OpenClaw-style secret refs first, then falls back to `MASSIVE_API_KEY`.
+
+For OpenClaw agents, prefer `MASSIVE_API_KEY_REF` so the runtime remains responsible for secret delivery and rotation.
 
 ## Usage
 
@@ -87,6 +101,7 @@ scripts/massive --dry-run get /v3/reference/tickers/AAPL
 
 - Keep the wrapper generic and extensible.
 - Prefer documented Massive paths over heavy wrapper abstractions.
+- Keep the repo Clawhub-safe and redistribution-safe.
 - Keep `stdout` machine-readable and `stderr` diagnostic-only.
 - Never print secrets or auth headers in logs.
 - Avoid storing local artifacts or private payloads in the repo.
