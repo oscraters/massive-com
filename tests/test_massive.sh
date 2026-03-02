@@ -141,10 +141,38 @@ test_dry_run_never_prints_secret() {
   assert_not_contains "$output" 'topsecret'
 }
 
+test_rejects_absolute_url_outside_default_origin() {
+  local stderr
+  set +e
+  stderr="$(
+    MASSIVE_API_KEY="topsecret" \
+    "${CLI}" get "https://example.com/v3/reference/tickers/AAPL" 2>&1
+  )"
+  local status=$?
+  set -e
+  [[ "$status" -ne 0 ]] || fail "expected command to fail for non-Massive origin"
+  assert_contains "$stderr" 'absolute URL origin must match MASSIVE_BASE_URL'
+}
+
+test_allows_absolute_url_when_base_url_is_overridden() {
+  local output
+  export FAKE_CURL_STATUS="200"
+  export FAKE_CURL_BODY='{"results":[{"ticker":"AAPL"}]}'
+  output="$(
+    MASSIVE_API_KEY="topsecret" \
+    MASSIVE_BASE_URL="https://sandbox.massive.test" \
+    "${CLI}" get "https://sandbox.massive.test/v3/reference/tickers/AAPL"
+  )"
+  assert_contains "$output" '"ticker": "AAPL"'
+  assert_contains "$(cat "${FAKE_CURL_URL}")" 'https://sandbox.massive.test/v3/reference/tickers/AAPL'
+}
+
 test_health_with_env_secret
 test_secret_ref_env
 test_get_builds_query_and_redacts_logs
 test_next_reads_next_url_from_stdin
 test_dry_run_never_prints_secret
+test_rejects_absolute_url_outside_default_origin
+test_allows_absolute_url_when_base_url_is_overridden
 
 printf 'ok\n'

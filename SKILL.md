@@ -14,6 +14,7 @@ Use the bundled CLI before writing ad hoc `curl` commands. Keep requests determi
 - Read [references/security.md](references/security.md) before changing logging, auth, or error handling.
 - Run `scripts/massive health` to validate local prerequisites and auth configuration.
 - Run `scripts/massive get /v3/reference/tickers/AAPL` for a generic REST request.
+- If you package or publish this skill, include every path listed in `BUNDLE_MANIFEST.md`.
 
 ## Workflow
 
@@ -42,10 +43,12 @@ Use the bundled CLI before writing ad hoc `curl` commands. Keep requests determi
 - Never print resolved secrets, auth headers, or raw secret-ref payloads.
 - Avoid `--verbose` in shared logs.
 - Feed `next_url` back into `get` or `next` instead of reconstructing pagination manually.
+- Treat non-`api.massive.com` absolute URLs as invalid unless `MASSIVE_BASE_URL` was explicitly changed to another HTTPS origin.
 
 ## Resources
 
 - `scripts/massive`: main Bash CLI
+- `BUNDLE_MANIFEST.md`: required file list for packaged artifacts
 - `references/openclaw-secrets.md`: credential and secret-ref contract used by this skill
 - `references/massive-api.md`: endpoint selection and request patterns
 - `references/security.md`: redaction and operational safety constraints

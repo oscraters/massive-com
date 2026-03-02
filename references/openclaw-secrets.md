@@ -16,7 +16,7 @@ Supported `source` values:
 
 - `env`: read a named environment variable
 - `file`: read a file path and trim the trailing newline
-- `exec`: execute a command and use stdout as the secret
+- `exec`: execute a command and use stdout as the secret, matching OpenClaw's SecretRef model
 
 Supported keys by source:
 
@@ -50,3 +50,7 @@ Example values:
 - Never log `MASSIVE_API_KEY` or the resolved output of a secret ref.
 - Never log `MASSIVE_API_KEY_REF` verbatim because `exec` refs can disclose internal tooling.
 - Log only the fact that auth was configured, not how it was resolved.
+
+## Alignment Note
+
+`exec` refs are intentionally supported to stay aligned with OpenClaw Secrets Management. Keep that behavior documented and assume the surrounding runtime is responsible for provider sandboxing and policy enforcement.

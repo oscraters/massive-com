@@ -9,6 +9,7 @@ This repo is intentionally thin: it provides a generic, extensible shell wrapper
 - `scripts/massive`: Bash CLI for generic REST requests and pagination
 - `SKILL.md`: skill instructions for Codex/OpenClaw-style agents
 - `agents/openai.yaml`: Clawhub/OpenAI skill metadata
+- `BUNDLE_MANIFEST.md`: required files for packaged skill artifacts
 - `references/`: API, secrets, and security guidance
 - `tests/test_massive.sh`: local smoke tests with mocked `curl`
 
@@ -33,6 +34,7 @@ This repo is structured as a public skill bundle:
 - `scripts/massive` is the executable wrapper
 
 For Clawhub distribution, publish the repo as-is and point consumers at the repository root. Do not add local-only setup files, captured payloads, or personal environment artifacts.
+If a published artifact omits any file listed in `BUNDLE_MANIFEST.md`, treat it as a packaging error and regenerate the bundle.
 
 Required runtime tools:
 
@@ -61,6 +63,7 @@ export MASSIVE_API_KEY='your-api-key'
 ```
 
 The CLI does not maintain a local credential store. It resolves OpenClaw-style secret refs first, then falls back to `MASSIVE_API_KEY`.
+The published skill metadata declares `MASSIVE_API_KEY_REF` as the preferred credential input and `MASSIVE_API_KEY` as the local fallback.
 
 For OpenClaw agents, prefer `MASSIVE_API_KEY_REF` so the runtime remains responsible for secret delivery and rotation.
 
@@ -101,6 +104,7 @@ scripts/massive --dry-run get /v3/reference/tickers/AAPL
 
 - Keep the wrapper generic and extensible.
 - Prefer documented Massive paths over heavy wrapper abstractions.
+- Default to `https://api.massive.com` and reject absolute URLs from other origins unless `MASSIVE_BASE_URL` is explicitly overridden.
 - Keep the repo Clawhub-safe and redistribution-safe.
 - Keep `stdout` machine-readable and `stderr` diagnostic-only.
 - Never print secrets or auth headers in logs.

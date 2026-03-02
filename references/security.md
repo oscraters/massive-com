@@ -7,7 +7,7 @@ This skill is public and intended for redistribution. Do not add personal data, 
 - Use `set -euo pipefail`.
 - Refuse to run with shell xtrace enabled.
 - Quote every expansion.
-- Allow requests only to `https://api.massive.com` unless `MASSIVE_BASE_URL` is explicitly set to another HTTPS origin.
+- Allow requests only to `https://api.massive.com` by default. If `MASSIVE_BASE_URL` is explicitly set, allow only that HTTPS origin instead.
 - Send auth in headers only.
 - Keep structured data on `stdout` and diagnostics on `stderr`.
 

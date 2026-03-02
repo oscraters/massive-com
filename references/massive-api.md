@@ -17,6 +17,8 @@ The CLI accepts:
 - a full `https://api.massive.com/...` URL
 - a `next_url` returned by Massive pagination
 
+By default, absolute URLs must stay on `https://api.massive.com`. If you explicitly set `MASSIVE_BASE_URL` to another HTTPS origin, that override becomes the only allowed absolute origin for direct requests and pagination.
+
 ## Included Shortcuts
 
 The bundled shortcuts cover a small set of high-signal, documented lookups:

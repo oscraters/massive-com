@@ -63,6 +63,36 @@ require_https_origin() {
   esac
 }
 
+origin_of_url() {
+  local url="$1"
+  case "$url" in
+    https://*)
+      printf '%s\n' "$url" | sed -E 's#^(https://[^/]+).*$#\1#'
+      ;;
+    *)
+      die "url must use https: $url"
+      ;;
+  esac
+}
+
+enforce_allowed_target() {
+  local target="$1"
+  local allowed_origin actual_origin
+
+  allowed_origin="$(origin_of_url "$MASSIVE_BASE_URL")"
+  case "$target" in
+    https://*)
+      actual_origin="$(origin_of_url "$target")"
+      [[ "$actual_origin" == "$allowed_origin" ]] || die "absolute URL origin must match MASSIVE_BASE_URL: $actual_origin"
+      ;;
+    /*)
+      ;;
+    *)
+      die "path must be relative (/...) or an absolute URL on ${allowed_origin}"
+      ;;
+  esac
+}
+
 urlencode() {
   jq -rn --arg v "$1" '$v|@uri'
 }
@@ -196,6 +226,7 @@ perform_get() {
   local api_key url body tmp_headers tmp_body http_code request_id duration_ms
 
   require_https_origin "$MASSIVE_BASE_URL"
+  enforce_allowed_target "$path_or_url"
   api_key="$(resolve_api_key)"
   url="$(build_url "$path_or_url" "${QUERY_ARGS[@]}")"
 
